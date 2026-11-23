@@ -48,6 +48,9 @@
 #define LB_MAX_SLICES   (64)
 #define LB_MAX_WIDTH    (800)
 #define LB_MAX_HEIGHT   (300)
+/* Output size limit: the picture is doubled while the keyboard is up. */
+#define LB_OUT_MAX_W    (LB_MAX_WIDTH * 2)
+#define LB_OUT_MAX_H    (LB_MAX_HEIGHT * 2)
 #ifndef LB_BUILD
 #define LB_BUILD "local"
 #endif
@@ -456,8 +459,8 @@ RETRO_EXPORT void retro_get_system_av_info(struct retro_system_av_info *info) {
 	memset(info, 0, sizeof(*info));
 	info->geometry.base_width = libretro_host_video_width();
 	info->geometry.base_height = libretro_host_video_height();
-	info->geometry.max_width = LB_MAX_WIDTH;
-	info->geometry.max_height = LB_MAX_HEIGHT;
+	info->geometry.max_width = LB_OUT_MAX_W;
+	info->geometry.max_height = LB_OUT_MAX_H;
 	info->geometry.aspect_ratio = 4.0f / 3.0f;
 	info->timing.fps = lb_fps;
 	info->timing.sample_rate = libretro_host_audio_rate();
@@ -723,24 +726,36 @@ RETRO_EXPORT void retro_run(void) {
 		struct retro_game_geometry geom = {
 			.base_width = lb_last_width,
 			.base_height = lb_last_height,
-			.max_width = LB_MAX_WIDTH,
-			.max_height = LB_MAX_HEIGHT,
+			.max_width = LB_OUT_MAX_W,
+			.max_height = LB_OUT_MAX_H,
 			.aspect_ratio = 4.0f / 3.0f,
 		};
 		environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
 	}
 
 	const void *frame = libretro_host_video_buffer();
+	unsigned fw = lb_last_width, fh = lb_last_height;
 	if (osk_active()) {
+		/* Double the picture so the keyboard can use bigger, sharper
+		 * letters, then draw it on top. */
 		if (!lb_out)
-			lb_out = malloc((size_t)LB_MAX_WIDTH * LB_MAX_HEIGHT * 4);
+			lb_out = malloc((size_t)LB_OUT_MAX_W * LB_OUT_MAX_H * 4);
 		if (lb_out) {
-			memcpy(lb_out, frame, (size_t)lb_last_width * lb_last_height * 4);
-			osk_draw(lb_out, lb_last_width, lb_last_height, lb_last_width);
+			const uint32_t *src = frame;
+			fw = lb_last_width * 2;
+			fh = lb_last_height * 2;
+			for (unsigned y = 0; y < lb_last_height; y++) {
+				uint32_t *d = lb_out + (size_t)y * 2 * fw;
+				const uint32_t *sr = src + (size_t)y * lb_last_width;
+				for (unsigned x = 0; x < lb_last_width; x++)
+					d[2 * x] = d[2 * x + 1] = sr[x];
+				memcpy(d + fw, d, (size_t)fw * 4);
+			}
+			osk_draw(lb_out, fw, fh, fw);
 			frame = lb_out;
 		}
 	}
-	video_cb(frame, lb_last_width, lb_last_height, lb_last_width * 4);
+	video_cb(frame, fw, fh, fw * 4);
 
 	/* Hand over whatever audio the emulated frame produced; RetroArch's
 	 * dynamic rate control absorbs the small drift. */

@@ -73,9 +73,9 @@ static const struct osk_key row4[] = {
 	{ "CTRL", 2, K_CTRL, DSCAN_CTRL, NULL },
 	{ "ALT", 1, K_ALT, DSCAN_ALT, NULL },
 	KEY("F1", DSCAN_F1), KEY("F2", DSCAN_F2),
-	WKEY("SPACE", 4, DSCAN_SPACE),
+	WKEY("SPACE", 3, DSCAN_SPACE),
 	KEY("LT", DSCAN_LEFT), KEY("RT", DSCAN_RIGHT), KEY("DN", DSCAN_DOWN),
-	{ "HIDE", 1, K_CLOSE, DSCAN_INVALID, NULL },
+	{ "HIDE", 2, K_CLOSE, DSCAN_INVALID, NULL },
 };
 static const struct osk_key row5[] = {
 	MACRO("DIR", 2, "\\025DIR\\r"),
@@ -383,7 +383,7 @@ static void draw_text_1(uint32_t *buf, unsigned pitch, int x, int y, int sx, int
 static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
 		      const char *s, uint32_t c, bool shadow) {
 	if (shadow)
-		draw_text_1(buf, pitch, x + 1, y + 1, sx, sy, s, 0x000000u);
+		draw_text_1(buf, pitch, x + (sx + 1) / 2, y + (sy + 1) / 2, sx, sy, s, 0x000000u);
 	draw_text_1(buf, pitch, x, y, sx, sy, s, c);
 }
 
@@ -403,9 +403,17 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 
 	/* Picture pixels are roughly twice as tall as wide when the line
 	 * count is around 200-280, so scale text 1:1 there. */
-	int sx = (w >= 1000) ? 2 : 1;
-	int sy = (h >= 400) ? 2 : 1;
-	int key_h = 10 * sy + 2;
+	/* The picture is doubled while the keyboard is up (see retro_run).
+	 * Its pixels show about twice as tall as wide, so letters are drawn
+	 * 1.5x wider than tall to look natural. */
+	int sy = (int)h / 180;
+	if (sy < 1)
+		sy = 1;
+	int sx = (sy * 3 + 1) / 2;
+	int fit = (int)w / OSK_COLS / 22;  /* 3-letter labels must fit a key */
+	if (sx > fit)
+		sx = fit > 0 ? fit : 1;
+	int key_h = 7 * sy + 2 * sy + 2;
 	int gap = 1;
 	int margin = 4;
 	int panel_h = (int)OSK_ROWS * (key_h + gap) + 2 * margin;

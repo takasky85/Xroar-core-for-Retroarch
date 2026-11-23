@@ -24,7 +24,7 @@ static unsigned frames_seen, frames_nonblack;
 static unsigned long long audio_frames_seen;
 static unsigned last_w, last_h;
 static bool pad_start, pad_select, pad_b, pad_right;
-static uint32_t last_frame[800 * 300];
+static uint32_t last_frame[1600 * 600];
 
 static bool env_cb(unsigned cmd, void *data) {
 	switch (cmd) {
@@ -58,7 +58,7 @@ static bool env_cb(unsigned cmd, void *data) {
 
 static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch) {
 	frames_seen++;
-	for (unsigned y = 0; y < height && y < 300; y++)
+	for (unsigned y = 0; y < height && y < 600; y++)
 		memcpy(last_frame + y * width, (const char *)data + y * pitch, width * 4);
 	last_w = width;
 	last_h = height;
