@@ -95,6 +95,19 @@ up the pad drives the keyboard instead of the joystick:
 | X | | Move the keyboard to the top or bottom |
 | Start | Channel Up | ENTER |
 
+The bottom row of keys changes how the picture is shown, while the game runs:
+
+| Key | Does |
+|---|---|
+| BORDER | Next border mode: Thin, None, Full, Smart, Auto-crop |
+| VIDEO | Next video input: S-Video, composite blue-red, composite red-blue, RGB (CoCo 3 only). On a CoCo 1/2, switching between the two composite settings swaps the artifact colours. |
+| ZOOM- / ZOOM+ | Zoom out / in (70% to 200%) |
+| 100% | Back to normal zoom |
+
+A status bar under the keys shows the machine, border mode, video input and
+zoom. The buttons set the mode for the current game; the Core Options give
+the values each game starts with.
+
 SHIFT, CTRL and ALT stay down until pressed again. The bottom row types
 whole commands: DIR, RUN, CLOAD, EXEC and DOS (each with ENTER), plus `"`,
 `=` and `$`.
@@ -119,7 +132,8 @@ without keys triggering hotkeys.
 
 | Option | Values |
 |---|---|
-| Border | Thin (default), None (256x192 only), Full |
+| Border | Thin (default), None (256x192 only), Full, Smart, Auto-crop |
+| Zoom | 100% (default), 70% to 200% (also on the on-screen keyboard) |
 | On-screen keyboard opacity | 50% (default), 25%, 75%, 100%, 0% (labels only) |
 | Machine | Auto, CoCo 1/2, CoCo 2B (lowercase), CoCo 3, CoCo 3 with 6309 CPU, and PAL versions |
 | Video input | Default, composite blue-red artifacts, red-blue artifacts, S-Video (no artifacts), RGB |
@@ -139,7 +153,12 @@ reset, as on the real machine, which can flip the artifact phase).
 - Save states work but go through a temporary file, so leave rewind off.
 - No WAV cassettes, printer, Becker port/DriveWire or GDB.
 - Border: None shows just the 256x192 screen and cuts off taller CoCo 3
-  screens; Thin (the default) fits those.
+  screens; Thin (the default) fits those. Smart starts at 256x192 and grows
+  once if a game draws outside it, but it can cut the bottom off on some
+  setups. Auto-crop trims the border colour like VICE, but the picture can
+  jiggle when a game changes screens. Both are experimental.
+- Zooming out shows more of the picture; past its edge it is black. Zooming
+  in cuts off the edges.
 
 ## Building
 

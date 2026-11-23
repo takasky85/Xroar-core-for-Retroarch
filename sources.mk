@@ -28,7 +28,7 @@ CORE_SRCS := \
 	rsdos.c sn76489.c spi65.c spi_sdcard.c wd279x.c \
 	mcx128.c
 
-GLUE_SRCS := libretro.c libretro_host.c osk.c disk_autorun.c
+GLUE_SRCS := libretro.c libretro_host.c osk.c disk_autorun.c autocrop.c smartcrop.c
 
 XROAR_INCLUDES := src upstream upstream/portalib upstream/src
 XROAR_DEFINES  := -DHAVE_CONFIG_H -D__LIBRETRO__

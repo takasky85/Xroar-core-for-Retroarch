@@ -23,7 +23,7 @@ static retro_keyboard_event_t g_kbd;
 static unsigned frames_seen, frames_nonblack;
 static unsigned long long audio_frames_seen;
 static unsigned last_w, last_h;
-static bool pad_start, pad_select, pad_b, pad_right;
+static bool pad_start, pad_select, pad_b, pad_right, pad_down;
 static uint32_t last_frame[1600 * 600];
 
 static bool env_cb(unsigned cmd, void *data) {
@@ -90,6 +90,8 @@ static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, un
 		return pad_b;
 	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_RIGHT)
 		return pad_right;
+	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_DOWN)
+		return pad_down;
 	return 0;
 }
 
@@ -191,7 +193,29 @@ int main(int argc, char **argv) {
 		fclose(f);
 	}
 	pad_b = false; p_retro_run();
+
+	/* Keyboard buttons: go to the bottom row (BORDER, VIDEO, ZOOM-, ZOOM+,
+	 * 100%), set border None and zoom out twice (80%), and expect the
+	 * picture to be 512x192 * 100/80 = 640x240 once the keyboard is shut. */
+	for (int i = 0; i < 6; i++) { pad_down = true; p_retro_run(); pad_down = false; p_retro_run(); }
+	pad_b = true; p_retro_run(); pad_b = false; p_retro_run();            /* BORDER: None */
+	pad_right = true; p_retro_run(); pad_right = false; p_retro_run();     /* VIDEO */
+	pad_right = true; p_retro_run(); pad_right = false; p_retro_run();     /* ZOOM- */
+	for (int i = 0; i < 2; i++) { pad_b = true; p_retro_run(); pad_b = false; p_retro_run(); }
+	const char *ppm2 = getenv("SMOKE_PPM2");
+	if (ppm2) {
+		FILE *f = fopen(ppm2, "wb");
+		fprintf(f, "P6\n%u %u\n255\n", last_w, last_h);
+		for (unsigned i = 0; i < last_w * last_h; i++) {
+			uint32_t c = last_frame[i];
+			fputc((c >> 16) & 0xff, f); fputc((c >> 8) & 0xff, f); fputc(c & 0xff, f);
+		}
+		fclose(f);
+	}
 	pad_select = true; p_retro_run(); pad_select = false; p_retro_run();
+	for (int i = 0; i < 3; i++) p_retro_run();
+	printf("after BORDER None + zoom 80%%: %ux%u (expect 640x240)\n", last_w, last_h);
+	if (last_w != 640 || last_h != 240) { fprintf(stderr, "FAIL: zoom/border geometry\n"); rc = 1; }
 
 	void *state = malloc(state_size);
 	if (!p_retro_serialize(state, state_size)) {

@@ -17,6 +17,19 @@
 #define OSK_ENTER     (1u << 7)
 #define OSK_BACKSPACE (1u << 8)
 
+/* Buttons on the keyboard that change how the core is shown; the core
+ * implements them through osk_set_action_handler(). */
+enum osk_action {
+	OSK_ACT_BORDER,      /* next border mode */
+	OSK_ACT_VIDEO,       /* next video input (artifact colours, RGB...) */
+	OSK_ACT_ZOOM_IN,
+	OSK_ACT_ZOOM_OUT,
+	OSK_ACT_ZOOM_RESET,
+};
+void osk_set_action_handler(void (*fn)(int action));
+/* Text for the status bar at the bottom of the keyboard. */
+void osk_set_status(const char *text);
+
 bool osk_active(void);
 /* 0 (invisible keys, text only) .. 100 (solid). */
 void osk_set_opacity(unsigned percent);

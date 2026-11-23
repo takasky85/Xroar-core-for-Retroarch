@@ -42,6 +42,8 @@
 #include "libretro_host.h"
 #include "disk_autorun.h"
 #include "osk.h"
+#include "autocrop.h"
+#include "smartcrop.h"
 
 #define RETRO_EXPORT __attribute__((visibility("default")))
 
@@ -49,8 +51,11 @@
 #define LB_MAX_WIDTH    (800)
 #define LB_MAX_HEIGHT   (300)
 /* Output size limit: the picture is doubled while the keyboard is up. */
-#define LB_OUT_MAX_W    (LB_MAX_WIDTH * 2)
-#define LB_OUT_MAX_H    (LB_MAX_HEIGHT * 2)
+#define LB_OUT_MAX_W    (2200)
+#define LB_OUT_MAX_H    (800)
+/* Largest picture handed to the zoom stage (70% zoom of a 736x276 picture). */
+#define LB_ZOOM_MAX_W   (1100)
+#define LB_ZOOM_MAX_H   (420)
 #ifndef LB_BUILD
 #define LB_BUILD "local"
 #endif
@@ -77,8 +82,23 @@ static bool opt_translate = true;
 static bool opt_swap_ports;
 static int opt_tv_input = -1;   /* -1 = XRoar default */
 static int opt_ccr = VO_CMP_CCR_5BIT;
-static int opt_picture = -1;
 static unsigned lb_out_w, lb_out_h;
+
+/* Border mode and zoom.  The core options give the starting values; the
+ * on-screen keyboard buttons change them while the core runs. */
+enum { BORDER_THIN, BORDER_NONE, BORDER_FULL, BORDER_SMART, BORDER_AUTO, BORDER_COUNT };
+static const char *const border_names[BORDER_COUNT] = {
+	"THIN", "NONE", "FULL", "SMART", "AUTO-CROP"
+};
+static const unsigned zoom_levels[] = { 70, 80, 90, 100, 110, 125, 150, 175, 200 };
+#define N_ZOOM    (sizeof(zoom_levels) / sizeof(zoom_levels[0]))
+#define ZOOM_100  (3)
+static int rt_border = BORDER_THIN;
+static int rt_zoom = ZOOM_100;
+static int last_opt_border = -2, last_opt_zoom = -2;
+
+/* Scratch buffer for zoomed-out pictures (padded with black). */
+static uint32_t *lb_zoom;
 
 /* Output buffer used when the on-screen keyboard is drawn over the picture. */
 static uint32_t *lb_out;
@@ -112,7 +132,9 @@ static const struct retro_variable lb_vars[] = {
 	{ "xroar_osk_opacity",
 	  "On-screen keyboard opacity; 50%|25%|75%|100%|0%" },
 	{ "xroar_border",
-	  "Border; Thin|None (256x192 only)|Full" },
+	  "Border; Thin|None (256x192 only)|Full|Smart (grows once for big CoCo 3 screens)|Auto-crop (like VICE, can jiggle)" },
+	{ "xroar_zoom",
+	  "Zoom (also on the on-screen keyboard); 100%|70%|80%|90%|110%|125%|150%|175%|200%" },
 	{ "xroar_tv_input",
 	  "Video input; Default|Composite, blue-red artifacts|Composite, red-blue artifacts|S-Video (no artifacts)|RGB" },
 	{ "xroar_ccr",
@@ -174,6 +196,68 @@ static const char *lb_machine_for(const char *path) {
 	return "coco3";
 }
 
+static void lb_apply_border(void) {
+	int picture;
+	switch (rt_border) {
+	case BORDER_NONE: picture = VO_PICTURE_ZOOMED; break;
+	case BORDER_FULL: picture = UI_AUTO; break;
+	case BORDER_SMART:
+	case BORDER_AUTO: picture = VO_PICTURE_UNDERSCAN; break;
+	default: picture = VO_PICTURE_TITLE; break;
+	}
+	ui_update_state(-1, ui_tag_picture, picture, NULL);
+	smartcrop_reset();
+	autocrop_reset();
+}
+
+/* On-screen keyboard buttons. */
+static void lb_osk_action(int action) {
+	switch (action) {
+	case OSK_ACT_BORDER:
+		rt_border = (rt_border + 1) % BORDER_COUNT;
+		lb_apply_border();
+		break;
+	case OSK_ACT_VIDEO:
+		ui_update_state(-1, ui_tag_tv_input, UI_NEXT, NULL);
+		break;
+	case OSK_ACT_ZOOM_IN:
+		if (rt_zoom < (int)N_ZOOM - 1)
+			rt_zoom++;
+		break;
+	case OSK_ACT_ZOOM_OUT:
+		if (rt_zoom > 0)
+			rt_zoom--;
+		break;
+	case OSK_ACT_ZOOM_RESET:
+		rt_zoom = ZOOM_100;
+		break;
+	}
+}
+
+/* Status bar text: machine, border, video input, zoom. */
+static void lb_update_status(void) {
+	static const char *const tvn[] = { "S-VIDEO", "CMP BLUE-RED", "CMP RED-BLUE", "RGB" };
+	char mach[40] = "?";
+	int tv = -1;
+	if (xroar.machine_config) {
+		const char *d = xroar.machine_config->description;
+		if (d) {
+			if (!strncasecmp(d, "Tandy ", 6))
+				d += 6;
+			size_t i;
+			for (i = 0; d[i] && i < sizeof(mach) - 1; i++)
+				mach[i] = (d[i] >= 'a' && d[i] <= 'z') ? (char)(d[i] - 32) : d[i];
+			mach[i] = 0;
+		}
+		tv = xroar.machine_config->tv_input;
+	}
+	char buf[96];
+	snprintf(buf, sizeof(buf), "%s  BORDER: %s  VIDEO: %s  ZOOM: %u%%", mach,
+		 border_names[rt_border], (tv >= 0 && tv <= 3) ? tvn[tv] : "?",
+		 zoom_levels[rt_zoom]);
+	osk_set_status(buf);
+}
+
 static void lb_read_runtime_options(bool apply) {
 	opt_translate = !lb_var_is("xroar_kbd_mode", "Positional");
 	opt_swap_ports = lb_var_is("xroar_player1_port", "Left");
@@ -201,11 +285,20 @@ static void lb_read_runtime_options(bool apply) {
 	const char *op = lb_get_var("xroar_osk_opacity");
 	osk_set_opacity(op ? (unsigned)atoi(op) : 50);
 
-	int picture = VO_PICTURE_TITLE;
-	if (lb_var_is("xroar_border", "None"))
-		picture = VO_PICTURE_ZOOMED;
-	else if (lb_var_is("xroar_border", "Full"))
-		picture = UI_AUTO;
+	int border = BORDER_THIN;
+	if (lb_var_is("xroar_border", "None")) border = BORDER_NONE;
+	else if (lb_var_is("xroar_border", "Full")) border = BORDER_FULL;
+	else if (lb_var_is("xroar_border", "Smart")) border = BORDER_SMART;
+	else if (lb_var_is("xroar_border", "Auto")) border = BORDER_AUTO;
+
+	int zoom = ZOOM_100;
+	const char *zv = lb_get_var("xroar_zoom");
+	if (zv) {
+		unsigned z = (unsigned)atoi(zv);
+		for (unsigned i = 0; i < N_ZOOM; i++)
+			if (zoom_levels[i] == z)
+				zoom = (int)i;
+	}
 
 	if (!apply || !core_active)
 		return;
@@ -216,9 +309,16 @@ static void lb_read_runtime_options(bool apply) {
 	if (ccr != opt_ccr)
 		ui_update_state(-1, ui_tag_ccr, ccr, NULL);
 	opt_ccr = ccr;
-	if (picture != opt_picture)
-		ui_update_state(-1, ui_tag_picture, picture, NULL);
-	opt_picture = picture;
+	/* A core option only overrides what the keyboard buttons set when the
+	 * option itself changes. */
+	if (border != last_opt_border) {
+		rt_border = border;
+		lb_apply_border();
+	}
+	last_opt_border = border;
+	if (zoom != last_opt_zoom)
+		rt_zoom = zoom;
+	last_opt_zoom = zoom;
 	ui_update_state(-1, ui_tag_tape_flag_fast, tape_fast, NULL);
 	libretro_host_connect_joysticks();
 }
@@ -496,6 +596,7 @@ RETRO_EXPORT void retro_set_input_poll(retro_input_poll_t cb) { input_poll_cb = 
 RETRO_EXPORT void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
 
 RETRO_EXPORT void retro_init(void) {
+	osk_set_action_handler(lb_osk_action);
 	libretro_host_install_modules();
 }
 
@@ -644,7 +745,8 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 		/* Force the options to be applied below. */
 		opt_tv_input = -2;
 		opt_ccr = -1;
-		opt_picture = -2;
+		last_opt_border = -2;
+		last_opt_zoom = -2;
 	} else {
 		struct machine_config *mc = machine_config_by_name(machine);
 		if (mc) {
@@ -653,7 +755,8 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 		}
 		opt_tv_input = -2;
 		opt_ccr = -1;
-		opt_picture = -2;
+		last_opt_border = -2;
+		last_opt_zoom = -2;
 	}
 
 	lb_read_runtime_options(true);
@@ -687,6 +790,8 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 	memset(lb_held_char, 0, sizeof(lb_held_char));
 	memset(lb_padkey_down, 0, sizeof(lb_padkey_down));
 	osk_reset();
+	autocrop_reset();
+	smartcrop_reset();
 	lb_out_w = lb_out_h = 0;
 	game_loaded = true;
 	lb_log(RETRO_LOG_INFO, "machine %s, content %s\n", machine, path);
@@ -726,24 +831,76 @@ RETRO_EXPORT void retro_run(void) {
 	const uint32_t *fb = libretro_host_video_buffer();
 	unsigned pitch = lb_last_width;
 
-	unsigned cw = lb_last_width, ch = lb_last_height;
-	const uint32_t *frame = fb;
-	unsigned fw = cw, fh = ch, fpitch = pitch;
+	/* 1. Border mode: which part of the emulator's picture to use. */
+	unsigned cx = 0, cy = 0, cw = lb_last_width, ch = lb_last_height;
+	if (rt_border == BORDER_SMART)
+		smartcrop_update(fb, lb_last_width, lb_last_height, pitch, &cx, &cy, &cw, &ch);
+	else if (rt_border == BORDER_AUTO)
+		autocrop_update(fb, lb_last_width, lb_last_height, pitch, &cx, &cy, &cw, &ch);
 
+	/* 2. Zoom: a rectangle sw x sh around the centre of that part.  Zoomed
+	 * in it is smaller (RetroArch scales it up); zoomed out it is bigger
+	 * and takes in more of the picture, padded with black beyond it. */
+	unsigned zoom = zoom_levels[rt_zoom];
+	unsigned sw = (cw * 100 / zoom) & ~1u, sh = ch * 100 / zoom;
+	if (sw > LB_ZOOM_MAX_W) sw = LB_ZOOM_MAX_W & ~1u;
+	if (sh > LB_ZOOM_MAX_H) sh = LB_ZOOM_MAX_H;
+	if (sw < 16) sw = 16;
+	if (sh < 16) sh = 16;
+	int sx = ((int)cx + ((int)cw - (int)sw) / 2) & ~1;
+	int sy = (int)cy + ((int)ch - (int)sh) / 2;
+	const uint32_t *frame;
+	unsigned fpitch;
+	if (sx >= 0 && sy >= 0 && sx + (int)sw <= (int)lb_last_width &&
+	    sy + (int)sh <= (int)lb_last_height) {
+		frame = fb + (size_t)sy * pitch + sx;
+		fpitch = pitch;
+	} else {
+		if (!lb_zoom)
+			lb_zoom = malloc((size_t)LB_ZOOM_MAX_W * LB_ZOOM_MAX_H * 4);
+		if (lb_zoom) {
+			for (unsigned y = 0; y < sh; y++) {
+				uint32_t *d = lb_zoom + (size_t)y * sw;
+				int py = sy + (int)y;
+				for (unsigned x = 0; x < sw; x++) {
+					int px = sx + (int)x;
+					d[x] = (py < 0 || py >= (int)lb_last_height ||
+						px < 0 || px >= (int)lb_last_width)
+						? 0 : fb[(size_t)py * pitch + px];
+				}
+			}
+			frame = lb_zoom;
+			fpitch = sw;
+		} else {
+			sw = cw; sh = ch;
+			frame = fb + (size_t)cy * pitch + cx;
+			fpitch = pitch;
+		}
+	}
+	unsigned fw = sw, fh = sh;
+
+	/* 3. On-screen keyboard: draw it over a copy of the picture, doubled
+	 * when there is room so its letters are sharper. */
 	if (osk_active()) {
-		/* Double the picture so the keyboard can use bigger, sharper
-		 * letters, then draw it on top. */
+		lb_update_status();
 		if (!lb_out)
 			lb_out = malloc((size_t)LB_OUT_MAX_W * LB_OUT_MAX_H * 4);
 		if (lb_out) {
-			fw = cw * 2;
-			fh = ch * 2;
-			for (unsigned y = 0; y < ch; y++) {
-				uint32_t *d = lb_out + (size_t)y * 2 * fw;
-				const uint32_t *sr = frame + (size_t)y * pitch;
-				for (unsigned x = 0; x < cw; x++)
-					d[2 * x] = d[2 * x + 1] = sr[x];
-				memcpy(d + fw, d, (size_t)fw * 4);
+			bool dbl = sw * 2 <= LB_OUT_MAX_W && sh * 2 <= LB_OUT_MAX_H;
+			if (dbl) {
+				fw = sw * 2;
+				fh = sh * 2;
+				for (unsigned y = 0; y < sh; y++) {
+					uint32_t *d = lb_out + (size_t)y * 2 * fw;
+					const uint32_t *sr = frame + (size_t)y * fpitch;
+					for (unsigned x = 0; x < sw; x++)
+						d[2 * x] = d[2 * x + 1] = sr[x];
+					memcpy(d + fw, d, (size_t)fw * 4);
+				}
+			} else {
+				for (unsigned y = 0; y < sh; y++)
+					memcpy(lb_out + (size_t)y * fw, frame + (size_t)y * fpitch,
+					       (size_t)fw * 4);
 			}
 			osk_draw(lb_out, fw, fh, fw);
 			frame = lb_out;
@@ -755,13 +912,13 @@ RETRO_EXPORT void retro_run(void) {
 		lb_out_w = fw;
 		lb_out_h = fh;
 		/* Picture lines show twice as tall as pixels are wide (640x240 is
-		 * 4:3), whatever the crop. */
+		 * 4:3), whatever the crop or zoom. */
 		struct retro_game_geometry geom = {
 			.base_width = fw,
 			.base_height = fh,
 			.max_width = LB_OUT_MAX_W,
 			.max_height = LB_OUT_MAX_H,
-			.aspect_ratio = (float)((double)cw / (double)ch * 0.5),
+			.aspect_ratio = (float)((double)sw / (double)sh * 0.5),
 		};
 		environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
 	}

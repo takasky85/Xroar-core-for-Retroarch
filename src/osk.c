@@ -30,7 +30,7 @@
 
 #include "osk.h"
 
-enum osk_kind { K_KEY, K_SHIFT, K_CTRL, K_ALT, K_MACRO, K_CLOSE };
+enum osk_kind { K_KEY, K_SHIFT, K_CTRL, K_ALT, K_MACRO, K_ACTION, K_CLOSE };
 
 struct osk_key {
 	const char *label;
@@ -43,6 +43,7 @@ struct osk_key {
 #define KEY(l, d)    { l, 1, K_KEY, d, NULL }
 #define WKEY(l, u, d) { l, u, K_KEY, d, NULL }
 #define MACRO(l, u, m) { l, u, K_MACRO, DSCAN_INVALID, m }
+#define ACT(l, u, a)   { l, u, K_ACTION, a, NULL }
 
 #define OSK_COLS 13
 
@@ -88,6 +89,14 @@ static const struct osk_key row5[] = {
 	MACRO("$", 1, "$"),
 };
 
+static const struct osk_key row6[] = {
+	ACT("BORDER", 3, OSK_ACT_BORDER),
+	ACT("VIDEO", 3, OSK_ACT_VIDEO),
+	ACT("ZOOM-", 2, OSK_ACT_ZOOM_OUT),
+	ACT("ZOOM+", 2, OSK_ACT_ZOOM_IN),
+	ACT("100%", 3, OSK_ACT_ZOOM_RESET),
+};
+
 struct osk_row {
 	const struct osk_key *keys;
 	unsigned n;
@@ -95,9 +104,21 @@ struct osk_row {
 
 #define ROW(r) { r, sizeof(r) / sizeof(r[0]) }
 static const struct osk_row rows[] = {
-	ROW(row0), ROW(row1), ROW(row2), ROW(row3), ROW(row4), ROW(row5),
+	ROW(row0), ROW(row1), ROW(row2), ROW(row3), ROW(row4), ROW(row5), ROW(row6),
 };
 #define OSK_ROWS (sizeof(rows) / sizeof(rows[0]))
+
+static void (*action_handler)(int action);
+static char status_text[96];
+
+void osk_set_action_handler(void (*fn)(int action)) {
+	action_handler = fn;
+}
+
+void osk_set_status(const char *text) {
+	strncpy(status_text, text ? text : "", sizeof(status_text) - 1);
+	status_text[sizeof(status_text) - 1] = 0;
+}
 
 static bool active;
 static bool at_top;
@@ -233,6 +254,10 @@ static void activate(void) {
 		if (xroar.auto_kbd)
 			ak_parse_type_string(xroar.auto_kbd, k->macro);
 		break;
+	case K_ACTION:
+		if (action_handler)
+			action_handler(k->dscan);
+		break;
 	case K_CLOSE:
 		osk_toggle();
 		break;
@@ -312,6 +337,7 @@ void osk_frame(unsigned buttons) {
 #define C_CURSOR  0xf0c020u
 #define C_TEXT    0xf0f0f0u
 #define C_TEXTCUR 0x101010u
+#define C_STATUS  0xc8e8a0u
 
 /* Keyboard opacity, 0..256. */
 static unsigned opacity = 128;
@@ -409,7 +435,7 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 	/* Sizes are fractions of the picture, so the keyboard looks the same
 	 * on screen whatever the picture size.  The picture is shown at about
 	 * 4:3, and a glyph is 7x7 dots with its spacing built in. */
-	int key_h = (int)h * 56 / 1000;
+	int key_h = (int)h * 52 / 1000;
 	if (key_h < 9)
 		key_h = 9;
 	int gh = key_h * 62 / 100;
@@ -419,7 +445,8 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 	gw = gw >= 7 ? (gw + 3) / 7 * 7 : 7;
 	int gap = 1;
 	int margin = (int)h / 100 > 2 ? (int)h / 100 : 2;
-	int panel_h = (int)OSK_ROWS * (key_h + gap) + 2 * margin;
+	int sb_h = key_h * 4 / 5;  /* status bar */
+	int panel_h = (int)OSK_ROWS * (key_h + gap) + sb_h + gap + 2 * margin;
 	int unit_w = ((int)w - 2 * margin) / OSK_COLS;
 	int panel_w = unit_w * OSK_COLS + 2 * margin;
 	int px = ((int)w - panel_w) / 2;
@@ -452,5 +479,29 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 				  cur ? C_TEXTCUR : C_TEXT, !cur && opacity < 256);
 			x += unit_w * k->units;
 		}
+	}
+
+	/* Status bar. */
+	int sb_x = px + margin;
+	int sb_y = py + margin + (int)OSK_ROWS * (key_h + gap);
+	int sb_w = panel_w - 2 * margin;
+	blend(buf, pitch, sb_x, sb_y, sb_w, sb_h, C_PANEL, opacity < 160 ? 160 : opacity);
+	size_t len = strlen(status_text);
+	if (len) {
+		int sgh = sb_h * 70 / 100;
+		if (sgh < 7)
+			sgh = 7;
+		int sgw = gw * sgh / gh;
+		int avail = sb_w - 2 * margin;
+		if ((int)len * sgw > avail) {
+			sgw = avail / (int)len;
+			if (sgw < 4)
+				sgw = 4;
+			sgh = sgw * gh / gw;
+			if (sgh < 5)
+				sgh = 5;
+		}
+		draw_text(buf, pitch, sb_x + margin, sb_y + (sb_h - sgh) / 2, sgw, sgh,
+			  status_text, C_STATUS, false);
 	}
 }
