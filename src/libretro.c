@@ -42,6 +42,7 @@
 #include "libretro_host.h"
 #include "disk_autorun.h"
 #include "osk.h"
+#include "autocrop.h"
 
 #define RETRO_EXPORT __attribute__((visibility("default")))
 
@@ -78,6 +79,8 @@ static bool opt_swap_ports;
 static int opt_tv_input = -1;   /* -1 = XRoar default */
 static int opt_ccr = VO_CMP_CCR_5BIT;
 static int opt_picture = -1;
+static bool opt_autocrop = true;
+static unsigned lb_out_w, lb_out_h;
 
 /* Output buffer used when the on-screen keyboard is drawn over the picture. */
 static uint32_t *lb_out;
@@ -111,7 +114,7 @@ static const struct retro_variable lb_vars[] = {
 	{ "xroar_osk_opacity",
 	  "On-screen keyboard opacity; 50%|25%|75%|100%|0%" },
 	{ "xroar_border",
-	  "Border; None|Thin|Full" },
+	  "Border; Auto-crop|None|Thin|Full" },
 	{ "xroar_tv_input",
 	  "Video input; Default|Composite, blue-red artifacts|Composite, red-blue artifacts|S-Video (no artifacts)|RGB" },
 	{ "xroar_ccr",
@@ -200,11 +203,16 @@ static void lb_read_runtime_options(bool apply) {
 	const char *op = lb_get_var("xroar_osk_opacity");
 	osk_set_opacity(op ? (unsigned)atoi(op) : 50);
 
-	int picture = VO_PICTURE_ZOOMED;
+	int picture = VO_PICTURE_UNDERSCAN;
+	opt_autocrop = true;
+	if (lb_var_is("xroar_border", "None"))
+		picture = VO_PICTURE_ZOOMED;
 	if (lb_var_is("xroar_border", "Thin"))
 		picture = VO_PICTURE_TITLE;
 	else if (lb_var_is("xroar_border", "Full"))
 		picture = UI_AUTO;
+	if (picture != VO_PICTURE_UNDERSCAN)
+		opt_autocrop = false;
 
 	if (!apply || !core_active)
 		return;
@@ -686,6 +694,8 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 	memset(lb_held_char, 0, sizeof(lb_held_char));
 	memset(lb_padkey_down, 0, sizeof(lb_padkey_down));
 	osk_reset();
+	autocrop_reset();
+	lb_out_w = lb_out_h = 0;
 	game_loaded = true;
 	lb_log(RETRO_LOG_INFO, "machine %s, content %s\n", machine, path);
 	return true;
@@ -719,43 +729,55 @@ RETRO_EXPORT void retro_run(void) {
 			break;
 	}
 
-	if (libretro_host_video_width() != lb_last_width ||
-	    libretro_host_video_height() != lb_last_height) {
-		lb_last_width = libretro_host_video_width();
-		lb_last_height = libretro_host_video_height();
-		struct retro_game_geometry geom = {
-			.base_width = lb_last_width,
-			.base_height = lb_last_height,
-			.max_width = LB_OUT_MAX_W,
-			.max_height = LB_OUT_MAX_H,
-			.aspect_ratio = 4.0f / 3.0f,
-		};
-		environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
-	}
+	lb_last_width = libretro_host_video_width();
+	lb_last_height = libretro_host_video_height();
+	const uint32_t *fb = libretro_host_video_buffer();
+	unsigned pitch = lb_last_width;
 
-	const void *frame = libretro_host_video_buffer();
-	unsigned fw = lb_last_width, fh = lb_last_height;
+	/* Visible rectangle: the whole picture, or the auto-cropped part. */
+	unsigned cx = 0, cy = 0, cw = lb_last_width, ch = lb_last_height;
+	if (opt_autocrop)
+		autocrop_update(fb, lb_last_width, lb_last_height, pitch, &cx, &cy, &cw, &ch);
+	const uint32_t *frame = fb + (size_t)cy * pitch + cx;
+	unsigned fw = cw, fh = ch, fpitch = pitch;
+
 	if (osk_active()) {
 		/* Double the picture so the keyboard can use bigger, sharper
 		 * letters, then draw it on top. */
 		if (!lb_out)
 			lb_out = malloc((size_t)LB_OUT_MAX_W * LB_OUT_MAX_H * 4);
 		if (lb_out) {
-			const uint32_t *src = frame;
-			fw = lb_last_width * 2;
-			fh = lb_last_height * 2;
-			for (unsigned y = 0; y < lb_last_height; y++) {
+			fw = cw * 2;
+			fh = ch * 2;
+			for (unsigned y = 0; y < ch; y++) {
 				uint32_t *d = lb_out + (size_t)y * 2 * fw;
-				const uint32_t *sr = src + (size_t)y * lb_last_width;
-				for (unsigned x = 0; x < lb_last_width; x++)
+				const uint32_t *sr = frame + (size_t)y * pitch;
+				for (unsigned x = 0; x < cw; x++)
 					d[2 * x] = d[2 * x + 1] = sr[x];
 				memcpy(d + fw, d, (size_t)fw * 4);
 			}
 			osk_draw(lb_out, fw, fh, fw);
 			frame = lb_out;
+			fpitch = fw;
 		}
 	}
-	video_cb(frame, fw, fh, fw * 4);
+
+	if (fw != lb_out_w || fh != lb_out_h) {
+		lb_out_w = fw;
+		lb_out_h = fh;
+		/* Picture lines show twice as tall as pixels are wide (640x240 is
+		 * 4:3), whatever the crop. */
+		struct retro_game_geometry geom = {
+			.base_width = fw,
+			.base_height = fh,
+			.max_width = LB_OUT_MAX_W,
+			.max_height = LB_OUT_MAX_H,
+			.aspect_ratio = (float)((double)cw / (double)ch * 0.5),
+		};
+		environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
+	}
+
+	video_cb(frame, fw, fh, fpitch * 4);
 
 	/* Hand over whatever audio the emulated frame produced; RetroArch's
 	 * dynamic rate control absorbs the small drift. */
