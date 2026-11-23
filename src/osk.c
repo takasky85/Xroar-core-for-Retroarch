@@ -313,6 +313,38 @@ void osk_frame(unsigned buttons) {
 #define C_TEXT    0xf0f0f0u
 #define C_TEXTCUR 0x101010u
 
+/* Keyboard opacity, 0..256. */
+static unsigned opacity = 128;
+
+void osk_set_opacity(unsigned percent) {
+	if (percent > 100)
+		percent = 100;
+	opacity = percent * 256 / 100;
+}
+
+/* Blend colour c over the picture with alpha a (0..256). */
+static void blend(uint32_t *buf, unsigned pitch, int x, int y, int w, int h, uint32_t c, unsigned a) {
+	if (a >= 256) {
+		for (int j = 0; j < h; j++) {
+			uint32_t *p = buf + (size_t)(y + j) * pitch + x;
+			for (int i = 0; i < w; i++)
+				p[i] = c;
+		}
+		return;
+	}
+	uint32_t crb = c & 0xff00ffu, cg = c & 0x00ff00u;
+	unsigned na = 256 - a;
+	for (int j = 0; j < h; j++) {
+		uint32_t *p = buf + (size_t)(y + j) * pitch + x;
+		for (int i = 0; i < w; i++) {
+			uint32_t d = p[i];
+			uint32_t rb = (((d & 0xff00ffu) * na + crb * a) >> 8) & 0xff00ffu;
+			uint32_t g = (((d & 0x00ff00u) * na + cg * a) >> 8) & 0x00ff00u;
+			p[i] = rb | g;
+		}
+	}
+}
+
 static void fill(uint32_t *buf, unsigned pitch, int x, int y, int w, int h, uint32_t c) {
 	for (int j = 0; j < h; j++) {
 		uint32_t *p = buf + (size_t)(y + j) * pitch + x;
@@ -332,8 +364,8 @@ static int font_index(char c) {
 
 /* The 6847 glyphs sit in rows 3..9 of 12, 6 pixels wide in an 8-pixel
  * cell.  Draw rows 2..10 to keep a little space. */
-static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
-		      const char *s, uint32_t c) {
+static void draw_text_1(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
+			const char *s, uint32_t c) {
 	for (; *s; s++, x += 7 * sx) {
 		const uint8_t *g = &font_6847[font_index(*s) * 12];
 		for (int row = 3; row < 10; row++) {
@@ -345,6 +377,14 @@ static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int sx, int s
 			}
 		}
 	}
+}
+
+/* Text with a dark shadow so it stays readable over the picture. */
+static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
+		      const char *s, uint32_t c, bool shadow) {
+	if (shadow)
+		draw_text_1(buf, pitch, x + 1, y + 1, sx, sy, s, 0x000000u);
+	draw_text_1(buf, pitch, x, y, sx, sy, s, c);
 }
 
 static bool key_lit(const struct osk_key *k) {
@@ -376,7 +416,10 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 	if (py < 0)
 		py = 0;
 
-	fill(buf, pitch, px, py, panel_w, panel_h, C_PANEL);
+	/* Keep 2 pixels clear at the far edge so the text shadow fits. */
+	if (py + panel_h > (int)h - 1)
+		py = (int)h - 1 - panel_h;
+	blend(buf, pitch, px, py, panel_w, panel_h, C_PANEL, opacity / 2);
 
 	for (unsigned r = 0; r < OSK_ROWS; r++) {
 		int x = px + margin;
@@ -386,13 +429,16 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 			int kw = unit_w * k->units - gap;
 			bool cur = (r == cur_row && i == cur_col);
 			uint32_t bg = cur ? C_CURSOR : key_lit(k) ? C_KEYDOWN : C_KEY;
-			fill(buf, pitch, x, y, kw, key_h, bg);
+			unsigned a = opacity;
+			if (cur || key_lit(k))
+				a = opacity < 200 ? 200 : opacity;
+			blend(buf, pitch, x, y, kw, key_h, bg, a);
 			int tw = (int)strlen(k->label) * 7 * sx;
 			int tx = x + (kw - tw) / 2;
 			if (tx < x)
 				tx = x;
 			draw_text(buf, pitch, tx, y + (key_h - 7 * sy) / 2, sx, sy, k->label,
-				  cur ? C_TEXTCUR : C_TEXT);
+				  cur ? C_TEXTCUR : C_TEXT, !cur && opacity < 256);
 			x += unit_w * k->units;
 		}
 	}

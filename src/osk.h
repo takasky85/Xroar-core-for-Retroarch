@@ -18,6 +18,8 @@
 #define OSK_BACKSPACE (1u << 8)
 
 bool osk_active(void);
+/* 0 (invisible keys, text only) .. 100 (solid). */
+void osk_set_opacity(unsigned percent);
 void osk_toggle(void);
 void osk_reset(void);
 void osk_frame(unsigned buttons);

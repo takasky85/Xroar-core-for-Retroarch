@@ -120,6 +120,7 @@ without keys triggering hotkeys.
 | Option | Values |
 |---|---|
 | Border | None (default), Thin, Full |
+| On-screen keyboard opacity | 50% (default), 25%, 75%, 100%, 0% (labels only) |
 | Machine | Auto, CoCo 1/2, CoCo 2B (lowercase), CoCo 3, CoCo 3 with 6309 CPU, and PAL versions |
 | Video input | Default, composite blue-red artifacts, red-blue artifacts, S-Video (no artifacts), RGB |
 | Artifact colour renderer | 5-bit (fast), Simple, Partial NTSC, Simulated (slow), None |

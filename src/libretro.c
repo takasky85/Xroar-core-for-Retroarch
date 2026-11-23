@@ -102,6 +102,8 @@ static void lb_notify(const char *msg, unsigned frames) {
 static const struct retro_variable lb_vars[] = {
 	{ "xroar_machine",
 	  "Machine (restart content); Auto (CoCo 3 unless the path says CoCo 1 or 2)|CoCo 1/2 (NTSC)|CoCo 2B (NTSC, lowercase)|CoCo 3 (NTSC)|CoCo 3 (NTSC, 6309 CPU)|CoCo 1/2 (PAL)|CoCo 2B (PAL)|CoCo 3 (PAL)" },
+	{ "xroar_osk_opacity",
+	  "On-screen keyboard opacity; 50%|25%|75%|100%|0%" },
 	{ "xroar_border",
 	  "Border; None|Thin|Full" },
 	{ "xroar_tv_input",
@@ -188,6 +190,9 @@ static void lb_read_runtime_options(bool apply) {
 	}
 
 	bool tape_fast = !lb_var_is("xroar_tape_fast", "disabled");
+
+	const char *op = lb_get_var("xroar_osk_opacity");
+	osk_set_opacity(op ? (unsigned)atoi(op) : 50);
 
 	int picture = VO_PICTURE_ZOOMED;
 	if (lb_var_is("xroar_border", "Thin"))
