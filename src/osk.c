@@ -364,27 +364,32 @@ static int font_index(char c) {
 
 /* The 6847 glyphs sit in rows 3..9 of 12, 6 pixels wide in an 8-pixel
  * cell.  Draw rows 2..10 to keep a little space. */
-static void draw_text_1(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
+/* Draw text with each glyph scaled to gw x gh pixels (any size, nearest
+ * neighbour), so the keyboard keeps the same size on screen whatever the
+ * picture size. */
+static void draw_text_1(uint32_t *buf, unsigned pitch, int x, int y, int gw, int gh,
 			const char *s, uint32_t c) {
-	for (; *s; s++, x += 7 * sx) {
+	for (; *s; s++, x += gw) {
 		const uint8_t *g = &font_6847[font_index(*s) * 12];
-		for (int row = 3; row < 10; row++) {
-			uint8_t bits = g[row];
-			for (int col = 0; col < 7; col++) {
-				if (!(bits & (0x40 >> col)))
-					continue;
-				fill(buf, pitch, x + col * sx, y + (row - 3) * sy, sx, sy, c);
+		for (int py = 0; py < gh; py++) {
+			uint8_t bits = g[3 + py * 7 / gh];
+			uint32_t *p = buf + (size_t)(y + py) * pitch + x;
+			for (int px = 0; px < gw; px++) {
+				if (bits & (0x40 >> (px * 7 / gw)))
+					p[px] = c;
 			}
 		}
 	}
 }
 
 /* Text with a dark shadow so it stays readable over the picture. */
-static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int sx, int sy,
+static void draw_text(uint32_t *buf, unsigned pitch, int x, int y, int gw, int gh,
 		      const char *s, uint32_t c, bool shadow) {
-	if (shadow)
-		draw_text_1(buf, pitch, x + (sx + 1) / 2, y + (sy + 1) / 2, sx, sy, s, 0x000000u);
-	draw_text_1(buf, pitch, x, y, sx, sy, s, c);
+	if (shadow) {
+		int d = gh / 8 > 0 ? gh / 8 : 1;
+		draw_text_1(buf, pitch, x + d, y + d, gw, gh, s, 0x000000u);
+	}
+	draw_text_1(buf, pitch, x, y, gw, gh, s, c);
 }
 
 static bool key_lit(const struct osk_key *k) {
@@ -401,21 +406,19 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 	if (!active || w < 200 || h < 100)
 		return;
 
-	/* Picture pixels are roughly twice as tall as wide when the line
-	 * count is around 200-280, so scale text 1:1 there. */
-	/* The picture is doubled while the keyboard is up (see retro_run).
-	 * Its pixels show about twice as tall as wide, so letters are drawn
-	 * 1.5x wider than tall to look natural. */
-	int sy = (int)h / 180;
-	if (sy < 1)
-		sy = 1;
-	int sx = (sy * 3 + 1) / 2;
-	int fit = (int)w / OSK_COLS / 22;  /* 3-letter labels must fit a key */
-	if (sx > fit)
-		sx = fit > 0 ? fit : 1;
-	int key_h = 7 * sy + 2 * sy + 2;
+	/* Sizes are fractions of the picture, so the keyboard looks the same
+	 * on screen whatever the picture size.  The picture is shown at about
+	 * 4:3, and a glyph is 7x7 dots with its spacing built in. */
+	int key_h = (int)h * 56 / 1000;
+	if (key_h < 9)
+		key_h = 9;
+	int gh = key_h * 62 / 100;
+	int gw = (int)w * 21 / 1000;
+	/* Whole dots look cleanest: round glyph sizes to multiples of 7. */
+	gh = gh >= 7 ? (gh + 3) / 7 * 7 : 7;
+	gw = gw >= 7 ? (gw + 3) / 7 * 7 : 7;
 	int gap = 1;
-	int margin = 4;
+	int margin = (int)h / 100 > 2 ? (int)h / 100 : 2;
 	int panel_h = (int)OSK_ROWS * (key_h + gap) + 2 * margin;
 	int unit_w = ((int)w - 2 * margin) / OSK_COLS;
 	int panel_w = unit_w * OSK_COLS + 2 * margin;
@@ -441,11 +444,11 @@ void osk_draw(uint32_t *buf, unsigned w, unsigned h, unsigned pitch) {
 			if (cur || key_lit(k))
 				a = opacity < 200 ? 200 : opacity;
 			blend(buf, pitch, x, y, kw, key_h, bg, a);
-			int tw = (int)strlen(k->label) * 7 * sx;
+			int tw = (int)strlen(k->label) * gw;
 			int tx = x + (kw - tw) / 2;
 			if (tx < x)
 				tx = x;
-			draw_text(buf, pitch, tx, y + (key_h - 7 * sy) / 2, sx, sy, k->label,
+			draw_text(buf, pitch, tx, y + (key_h - gh) / 2, gw, gh, k->label,
 				  cur ? C_TEXTCUR : C_TEXT, !cur && opacity < 256);
 			x += unit_w * k->units;
 		}

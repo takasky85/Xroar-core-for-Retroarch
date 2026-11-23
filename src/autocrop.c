@@ -1,12 +1,13 @@
 /** \file
  *
- *  \brief Automatic border cropping for the XRoar libretro core.
+ *  \brief Smart border for the XRoar libretro core.
  *
- *  Like VICE's auto-crop: the emulator renders the full picture with its
- *  border, and this finds the rectangle that holds anything other than the
- *  border colour.  The crop grows at once when the picture needs more room
- *  and shrinks only after the smaller picture has been stable for a couple
- *  of seconds, so it does not flicker between screens.
+ *  The emulator renders the full underscan picture (736x276, two picture
+ *  pixels per CoCo pixel across).  The core shows only the standard CoCo
+ *  display area, 256x192, and if a game ever draws outside it (the CoCo 3's
+ *  taller or wider GIME modes, or graphics in the border) it widens once to
+ *  the next standard size that fits and stays there until the next game.
+ *  It never shrinks, so the picture does not jump around.
  *
  *  \licenseblock This file is part of xroar-core-for-retroarch.
  *
@@ -24,23 +25,33 @@
 
 #include "autocrop.h"
 
-#define CHECK_EVERY   4   /* frames between scans */
-#define SHRINK_AFTER  30  /* stable scans (~2 s) before shrinking */
-#define MIN_W         64
-#define MIN_H         48
-#define TOLERANCE     24  /* per-channel difference that counts as content */
+/* Centre of the 256x192 display area within the 736x276 underscan picture
+ * (measured: it sits at x 112..624, y 38..230). */
+#define CENTRE_X2  (2 * 368)
+#define CENTRE_Y2  (2 * 134)
 
-static unsigned cur_x, cur_y, cur_w, cur_h;
+/* Standard sizes in picture pixels: 256 or 320 CoCo pixels across, and the
+ * GIME's 192/200/210/225 line modes. */
+static const unsigned widths[] = { 512, 640 };
+static const unsigned heights[] = { 192, 200, 210, 225 };
+#define N_W (sizeof(widths) / sizeof(widths[0]))
+#define N_H (sizeof(heights) / sizeof(heights[0]))
+
+#define CHECK_EVERY  4   /* frames between scans */
+#define CONFIRM      2   /* scans in a row before growing */
+#define SLACK        8   /* pixels of composite blur allowed past an edge */
+#define TOLERANCE    24  /* per-channel difference that counts as content */
+#define SETTLE       120 /* frames to ignore after loading (machine start-up) */
+
+static unsigned wi, hi;          /* current size indexes */
+static unsigned want_wi, want_hi, want_count;
 static unsigned last_fw, last_fh;
-static bool have_crop;
 static unsigned frame_count;
-static unsigned shrink_count;
-static unsigned pend_x0, pend_y0, pend_x1, pend_y1;
 
 void autocrop_reset(void) {
-	have_crop = false;
+	wi = hi = 0;
+	want_count = 0;
 	frame_count = 0;
-	shrink_count = 0;
 	last_fw = last_fh = 0;
 }
 
@@ -51,50 +62,57 @@ static bool differs(uint32_t a, uint32_t b) {
 	return abs(dr) > TOLERANCE || abs(dg) > TOLERANCE || abs(db) > TOLERANCE;
 }
 
-static bool row_has_content(const uint32_t *row, unsigned w, uint32_t border) {
-	for (unsigned x = 0; x < w; x++)
-		if (differs(row[x], border))
-			return true;
-	return false;
+/* Rectangle of size (w,h) centred on the display area, clipped to the
+ * picture. */
+static void rect_for(unsigned fw, unsigned fh, unsigned w, unsigned h,
+		     unsigned *x, unsigned *y, unsigned *cw, unsigned *ch) {
+	int x0 = ((int)CENTRE_X2 - (int)w) / 2;
+	int y0 = ((int)CENTRE_Y2 - (int)h) / 2;
+	/* Scale the centre if the picture is not the usual underscan size. */
+	if (fw != 736 || fh != 276) {
+		x0 = ((int)fw - (int)w) / 2;
+		y0 = ((int)fh - (int)h) / 2;
+	}
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if ((unsigned)x0 + w > fw) w = fw - (unsigned)x0;
+	if ((unsigned)y0 + h > fh) h = fh - (unsigned)y0;
+	*x = (unsigned)x0 & ~1u;
+	*y = (unsigned)y0;
+	*cw = w;
+	*ch = h;
 }
 
-/* Finds the content rectangle [x0,x1) x [y0,y1).  Returns false if the
- * picture is (nearly) all border. */
-static bool scan(const uint32_t *fb, unsigned w, unsigned h, unsigned pitch,
-		 unsigned *x0, unsigned *y0, unsigned *x1, unsigned *y1) {
+/* Is there content in the picture outside rectangle r (ignoring SLACK
+ * pixels of blur) but inside the largest standard rectangle? */
+static void scan(const uint32_t *fb, unsigned fw, unsigned fh, unsigned pitch,
+		 bool *need_w, bool *need_h) {
+	unsigned x, y, w, h, bx, by, bw, bh;
+	rect_for(fw, fh, widths[wi], heights[hi], &x, &y, &w, &h);
+	rect_for(fw, fh, widths[N_W - 1], heights[N_H - 1], &bx, &by, &bw, &bh);
 	uint32_t border = fb[0];
-	unsigned top = 0, bot = h;
-	while (top < h && !row_has_content(fb + (size_t)top * pitch, w, border))
-		top++;
-	if (top == h)
-		return false;
-	while (bot > top && !row_has_content(fb + (size_t)(bot - 1) * pitch, w, border))
-		bot--;
+	*need_w = *need_h = false;
 
-	unsigned left = w, right = 0;
-	for (unsigned y = top; y < bot; y++) {
-		const uint32_t *row = fb + (size_t)y * pitch;
-		unsigned x = 0;
-		while (x < left && !differs(row[x], border))
-			x++;
-		if (x < left)
-			left = x;
-		x = w;
-		while (x > right && !differs(row[x - 1], border))
-			x--;
-		if (x > right)
-			right = x;
+	/* Rows above and below the current area, within the biggest area. */
+	for (unsigned yy = by; yy < by + bh; yy++) {
+		bool outside_y = yy + SLACK < y || yy >= y + h + SLACK;
+		const uint32_t *row = fb + (size_t)yy * pitch;
+		for (unsigned xx = bx; xx < bx + bw; xx++) {
+			bool outside_x = xx + SLACK < x || xx >= x + w + SLACK;
+			if (!outside_x && !outside_y)
+				continue;
+			if (!differs(row[xx], border))
+				continue;
+			if (outside_y && xx + SLACK >= x && xx < x + w + SLACK)
+				*need_h = true;
+			else if (outside_x && !outside_y)
+				*need_w = true;
+			else {
+				*need_w = true;
+				*need_h = true;
+			}
+		}
 	}
-	if (right <= left)
-		return false;
-
-	/* Even edges keep the doubled-pixel artifact patterns intact. */
-	*x0 = left & ~1u;
-	*x1 = (right + 1) & ~1u;
-	if (*x1 > w) *x1 = w;
-	*y0 = top;
-	*y1 = bot;
-	return (*x1 - *x0) >= MIN_W && (*y1 - *y0) >= MIN_H;
 }
 
 void autocrop_update(const uint32_t *fb, unsigned w, unsigned h, unsigned pitch,
@@ -105,49 +123,28 @@ void autocrop_update(const uint32_t *fb, unsigned w, unsigned h, unsigned pitch,
 		last_fh = h;
 	}
 
-	if (frame_count++ % CHECK_EVERY == 0) {
-		unsigned x0, y0, x1, y1;
-		if (scan(fb, w, h, pitch, &x0, &y0, &x1, &y1)) {
-			if (!have_crop) {
-				cur_x = x0; cur_y = y0; cur_w = x1 - x0; cur_h = y1 - y0;
-				have_crop = true;
-				shrink_count = 0;
-			} else {
-				unsigned cx1 = cur_x + cur_w, cy1 = cur_y + cur_h;
-				bool grow = x0 < cur_x || y0 < cur_y || x1 > cx1 || y1 > cy1;
-				if (grow) {
-					/* Grow to cover both at once. */
-					if (x0 < cur_x) cur_x = x0;
-					if (y0 < cur_y) cur_y = y0;
-					if (x1 > cx1) cx1 = x1;
-					if (y1 > cy1) cy1 = y1;
-					cur_w = cx1 - cur_x;
-					cur_h = cy1 - cur_y;
-					shrink_count = 0;
-				} else if (x0 != cur_x || y0 != cur_y || x1 != cx1 || y1 != cy1) {
-					/* Smaller: wait until it is the same for a while. */
-					if (shrink_count && x0 == pend_x0 && y0 == pend_y0 &&
-					    x1 == pend_x1 && y1 == pend_y1) {
-						if (++shrink_count >= SHRINK_AFTER) {
-							cur_x = x0; cur_y = y0;
-							cur_w = x1 - x0; cur_h = y1 - y0;
-							shrink_count = 0;
-						}
-					} else {
-						pend_x0 = x0; pend_y0 = y0;
-						pend_x1 = x1; pend_y1 = y1;
-						shrink_count = 1;
-					}
-				} else {
-					shrink_count = 0;
+	if (frame_count++ % CHECK_EVERY == 0 && frame_count > SETTLE && (wi < N_W - 1 || hi < N_H - 1)) {
+		bool need_w, need_h;
+		scan(fb, w, h, pitch, &need_w, &need_h);
+		unsigned nwi = wi, nhi = hi;
+		if (need_w && nwi < N_W - 1) nwi++;
+		if (need_h && nhi < N_H - 1) nhi++;
+		if (nwi != wi || nhi != hi) {
+			if (want_count && nwi == want_wi && nhi == want_hi) {
+				if (++want_count >= CONFIRM) {
+					wi = nwi;
+					hi = nhi;
+					want_count = 0;
 				}
+			} else {
+				want_wi = nwi;
+				want_hi = nhi;
+				want_count = 1;
 			}
+		} else {
+			want_count = 0;
 		}
 	}
 
-	if (!have_crop) {
-		*x = 0; *y = 0; *cw = w; *ch = h;
-		return;
-	}
-	*x = cur_x; *y = cur_y; *cw = cur_w; *ch = cur_h;
+	rect_for(w, h, widths[wi], heights[hi], x, y, cw, ch);
 }

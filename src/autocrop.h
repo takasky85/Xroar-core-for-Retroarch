@@ -1,4 +1,5 @@
-/* Automatic border cropping.  GPL-3.0-or-later. */
+/* Smart border: standard CoCo screen area, grows for bigger modes, never
+ * shrinks until reset.  GPL-3.0-or-later. */
 
 #ifndef XROAR_LIBRETRO_AUTOCROP_H_
 #define XROAR_LIBRETRO_AUTOCROP_H_

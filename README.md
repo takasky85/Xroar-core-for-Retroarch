@@ -119,7 +119,7 @@ without keys triggering hotkeys.
 
 | Option | Values |
 |---|---|
-| Border | Auto-crop (default: trims the border colour, like VICE), None, Thin, Full |
+| Border | Smart (default), None (256x192 only), Thin, Full |
 | On-screen keyboard opacity | 50% (default), 25%, 75%, 100%, 0% (labels only) |
 | Machine | Auto, CoCo 1/2, CoCo 2B (lowercase), CoCo 3, CoCo 3 with 6309 CPU, and PAL versions |
 | Video input | Default, composite blue-red artifacts, red-blue artifacts, S-Video (no artifacts), RGB |
@@ -138,10 +138,11 @@ reset, as on the real machine, which can flip the artifact phase).
 - Only one disk per game: no disk swapping from the RetroArch menu yet.
 - Save states work but go through a temporary file, so leave rewind off.
 - No WAV cassettes, printer, Becker port/DriveWire or GDB.
-- Border: Auto-crop shows everything that isn't border colour. It grows at
-  once when a game draws further out and shrinks only after about two
-  seconds, so it does not flicker. None always shows the 256x192 area and
-  cuts off CoCo 3 screens that are taller.
+- Border: Smart shows the standard 256x192 screen area with no border. If
+  a game draws outside it (taller or wider CoCo 3 modes), the picture
+  widens once to the next standard size (320 across; 200, 210 or 225 lines)
+  and stays that way until you load another game, so it never jiggles.
+  None always shows just 256x192 and cuts off bigger CoCo 3 screens.
 
 ## Building
 

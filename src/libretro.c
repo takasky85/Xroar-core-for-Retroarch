@@ -114,7 +114,7 @@ static const struct retro_variable lb_vars[] = {
 	{ "xroar_osk_opacity",
 	  "On-screen keyboard opacity; 50%|25%|75%|100%|0%" },
 	{ "xroar_border",
-	  "Border; Auto-crop|None|Thin|Full" },
+	  "Border; Smart (screen area, grows for big CoCo 3 modes)|None (256x192 only)|Thin|Full" },
 	{ "xroar_tv_input",
 	  "Video input; Default|Composite, blue-red artifacts|Composite, red-blue artifacts|S-Video (no artifacts)|RGB" },
 	{ "xroar_ccr",
