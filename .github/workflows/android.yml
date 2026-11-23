@@ -1,0 +1,39 @@
+name: Build core
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Desktop build and smoke test
+        run: make -j"$(nproc)" && make test
+
+      - name: Android armeabi-v7a build
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          echo "Using NDK at $NDK"
+          "$NDK/ndk-build" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk -j"$(nproc)"
+          file libs/armeabi-v7a/libretro.so
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp libs/armeabi-v7a/libretro.so dist/xroar_libretro_android.so
+          cp xroar_libretro.info dist/
+          ls -la dist
+
+      # The downloaded artifact is itself the install zip: it holds
+      # xroar_libretro_android.so and xroar_libretro.info at the top level.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xroar_libretro_android-armeabi-v7a
+          path: dist/*
+          if-no-files-found: error

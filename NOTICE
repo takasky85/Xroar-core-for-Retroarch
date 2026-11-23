@@ -1,0 +1,20 @@
+XRoar CoCo core for RetroArch
+
+XRoar
+    Copyright (C) 2003-2026  Ciaran Anscomb and contributors
+    https://www.6809.org.uk/xroar/
+    Included as the upstream/ git submodule (mirror: github.com/stahta01/xroar)
+    Licence: GNU General Public License v3 or later
+
+libretro glue (src/libretro.c, src/libretro_host.c, src/libretro_host.h)
+    Based on konsumer/xroar-libretro (GPL-3.0-or-later), modified for this
+    core: CoCo 1/2/3 only, core options, keyboard and gamepad mapping,
+    Android build.
+
+src/libretro.h
+    libretro API header, Copyright (C) 2010-2024 The RetroArch team, MIT licence.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See COPYING.
