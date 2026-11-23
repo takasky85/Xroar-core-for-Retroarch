@@ -3,7 +3,8 @@ name: Build core
 on:
   push:
     branches: [main]
-    tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -42,12 +43,13 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # On a v* tag, publish a GitHub release with the install zip.
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # When a release is published, attach the install zip to it.
+      - name: Attach zip to release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ZIP="xroar_libretro_android-armeabi-v7a-${GITHUB_REF_NAME}.zip"
+          TAG="${{ github.event.release.tag_name }}"
+          ZIP="xroar_libretro_android-armeabi-v7a-${TAG}.zip"
           (cd dist && zip -9 "../$ZIP" xroar_libretro_android.so xroar_libretro.info)
-          gh release create "$GITHUB_REF_NAME" "$ZIP" --title "XRoar CoCo core $GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
+          gh release upload "$TAG" "$ZIP" --clobber
