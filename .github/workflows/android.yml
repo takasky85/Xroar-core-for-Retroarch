@@ -3,9 +3,12 @@ name: Build core
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a GitHub release with this tag (e.g. v1.0); leave empty for a plain build'
+        required: false
+        default: 
 
 permissions:
   contents: write
@@ -43,13 +46,15 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # When a release is published, attach the install zip to it.
-      - name: Attach zip to release
-        if: github.event_name == 'release'
+      # Run the workflow by hand with a release tag to publish a release
+      # (tag on this commit) with the install zip attached.
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
           ZIP="xroar_libretro_android-armeabi-v7a-${TAG}.zip"
           (cd dist && zip -9 "../$ZIP" xroar_libretro_android.so xroar_libretro.info)
-          gh release upload "$TAG" "$ZIP" --clobber
+          gh release create "$TAG" "$ZIP" --target "$GITHUB_SHA" \
+            --title "XRoar CoCo core $TAG" --notes-file RELEASE_NOTES.md
