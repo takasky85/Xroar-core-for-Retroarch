@@ -48,7 +48,10 @@
 #define LB_MAX_SLICES   (64)
 #define LB_MAX_WIDTH    (800)
 #define LB_MAX_HEIGHT   (300)
-#define LB_CORE_VERSION "1.13.0-dev (93842a7)"
+#ifndef LB_BUILD
+#define LB_BUILD "local"
+#endif
+#define LB_CORE_VERSION "1.13.0-dev (93842a7), build " LB_BUILD
 
 static retro_environment_t environ_cb;
 static retro_video_refresh_t video_cb;

@@ -11,7 +11,8 @@ LOCAL_SRC_FILES := \
 	$(addprefix ../upstream/src/,$(CORE_SRCS)) \
 	$(addprefix ../src/,$(GLUE_SRCS))
 LOCAL_C_INCLUDES := $(addprefix $(ROOT)/,$(XROAR_INCLUDES))
-LOCAL_CFLAGS    := $(XROAR_DEFINES) -std=gnu11 -O2 -fvisibility=hidden \
+LB_BUILD ?= local
+LOCAL_CFLAGS    := $(XROAR_DEFINES) -DLB_BUILD=\"$(LB_BUILD)\" -std=gnu11 -O2 -fvisibility=hidden \
                    -Wno-unused-function -Werror=implicit-function-declaration
 LOCAL_LDFLAGS   := -Wl,--version-script=$(ROOT)/link.T
 LOCAL_LDLIBS    := -lm -llog
