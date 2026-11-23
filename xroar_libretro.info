@@ -47,6 +47,6 @@ firmware3_opt = "true"
 firmware4_desc = "coco3p.rom (Super Extended Color BASIC, CoCo 3 PAL)"
 firmware4_path = "coco3p.rom"
 firmware4_opt = "true"
-notes = "(!) ROMs go in the RetroArch system folder, or its xroar/ or coco/ subfolder.|(!) CoCo 3 is picked automatically when the file or folder name contains 'CoCo 3' or 'coco3'; otherwise set Core Options > Machine.|(!) Pad: D-pad/left stick = joystick, B (remote OK) = fire 1, A = fire 2, Start = ENTER, Select = SPACE, X = 1, Y = 2, L2 = Y, R2 = N.|(!) Turn on Game Focus to type on a keyboard without triggering hotkeys."
+notes = "(!) ROMs go in the RetroArch system folder, or its xroar/ or coco/ subfolder.|(!) Machine defaults to CoCo 3; files in a folder or with a name containing CoCo 1 or CoCo 2 boot a CoCo 2.|(!) Select (remote Channel Down) opens the on-screen keyboard: D-pad moves, B (OK) types, A deletes, Y shift, X moves it, Start enter.|(!) Pad: D-pad/left stick = joystick, B (remote OK) = fire 1, A = fire 2, Start = ENTER, X = 1, Y = 2, L2 = Y, R2 = N.|(!) Disks autorun the program found on them (RUN or LOADM+EXEC)."
 
 description = "XRoar by Ciaran Anscomb, cut down to the Tandy Color Computer 1, 2 and 3. Runs cartridges, cassettes and disks, with autorun."

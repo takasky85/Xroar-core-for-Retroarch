@@ -40,6 +40,8 @@
 #include "xroar.h"
 
 #include "libretro_host.h"
+#include "disk_autorun.h"
+#include "osk.h"
 
 #define RETRO_EXPORT __attribute__((visibility("default")))
 
@@ -69,6 +71,10 @@ static bool opt_translate = true;
 static bool opt_swap_ports;
 static int opt_tv_input = -1;   /* -1 = XRoar default */
 static int opt_ccr = VO_CMP_CCR_5BIT;
+static int opt_picture = -1;
+
+/* Output buffer used when the on-screen keyboard is drawn over the picture. */
+static uint32_t *lb_out;
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
@@ -95,7 +101,9 @@ static void lb_notify(const char *msg, unsigned frames) {
 
 static const struct retro_variable lb_vars[] = {
 	{ "xroar_machine",
-	  "Machine (restart content); Auto|CoCo 1/2 (NTSC)|CoCo 2B (NTSC, lowercase)|CoCo 3 (NTSC)|CoCo 3 (NTSC, 6309 CPU)|CoCo 1/2 (PAL)|CoCo 2B (PAL)|CoCo 3 (PAL)" },
+	  "Machine (restart content); Auto (CoCo 3 unless the path says CoCo 1 or 2)|CoCo 1/2 (NTSC)|CoCo 2B (NTSC, lowercase)|CoCo 3 (NTSC)|CoCo 3 (NTSC, 6309 CPU)|CoCo 1/2 (PAL)|CoCo 2B (PAL)|CoCo 3 (PAL)" },
+	{ "xroar_border",
+	  "Border; None|Thin|Full" },
 	{ "xroar_tv_input",
 	  "Video input; Default|Composite, blue-red artifacts|Composite, red-blue artifacts|S-Video (no artifacts)|RGB" },
 	{ "xroar_ccr",
@@ -123,9 +131,9 @@ static bool lb_var_is(const char *key, const char *prefix) {
 	return v && strncmp(v, prefix, strlen(prefix)) == 0;
 }
 
-/* Machine for the content path.  "Auto" picks a CoCo 3 when the file name or
- * its folder mentions it (e.g. "Games/CoCo 3/foo.dsk" or "foo (CoCo3).ccc"),
- * otherwise a CoCo 2. */
+/* Machine for the content path.  "Auto" picks a CoCo 3, unless the file name
+ * or a folder in its path names a CoCo 1 or 2 (e.g. "Games/CoCo 2/foo.cas"),
+ * in which case it picks a CoCo 2. */
 static const char *lb_machine_for(const char *path) {
 	const char *v = lb_get_var("xroar_machine");
 	if (v) {
@@ -139,7 +147,8 @@ static const char *lb_machine_for(const char *path) {
 	}
 	if (path) {
 		static const char *const hints[] = {
-			"coco3", "coco 3", "coco_3", "coco-3", "cc3", NULL
+			"coco1", "coco 1", "coco_1", "coco-1",
+			"coco2", "coco 2", "coco_2", "coco-2", NULL
 		};
 		char low[4096];
 		size_t i;
@@ -150,10 +159,10 @@ static const char *lb_machine_for(const char *path) {
 		low[i] = 0;
 		for (int h = 0; hints[h]; h++) {
 			if (strstr(low, hints[h]))
-				return "coco3";
+				return "cocous";
 		}
 	}
-	return "cocous";
+	return "coco3";
 }
 
 static void lb_read_runtime_options(bool apply) {
@@ -180,6 +189,12 @@ static void lb_read_runtime_options(bool apply) {
 
 	bool tape_fast = !lb_var_is("xroar_tape_fast", "disabled");
 
+	int picture = VO_PICTURE_ZOOMED;
+	if (lb_var_is("xroar_border", "Thin"))
+		picture = VO_PICTURE_TITLE;
+	else if (lb_var_is("xroar_border", "Full"))
+		picture = UI_AUTO;
+
 	if (!apply || !core_active)
 		return;
 
@@ -189,6 +204,9 @@ static void lb_read_runtime_options(bool apply) {
 	if (ccr != opt_ccr)
 		ui_update_state(-1, ui_tag_ccr, ccr, NULL);
 	opt_ccr = ccr;
+	if (picture != opt_picture)
+		ui_update_state(-1, ui_tag_picture, picture, NULL);
+	opt_picture = picture;
 	ui_update_state(-1, ui_tag_tape_flag_fast, tape_fast, NULL);
 	libretro_host_connect_joysticks();
 }
@@ -299,8 +317,9 @@ static void lb_keyboard_event(bool down, unsigned keycode, uint32_t character, u
 
 /* Gamepads.  RetroPad 1 drives the joystick in the player 1 port (right by
  * default, as most CoCo games expect), RetroPad 2 the other one.  Spare
- * buttons on pad 1 press keys games commonly ask for.  On a TV remote, OK is
- * RetroPad B, Channel Up is Start and Channel Down is Select. */
+ * buttons on pad 1 press keys games commonly ask for, and Select opens the
+ * on-screen keyboard.  On a TV remote, OK is RetroPad B, Channel Up is Start
+ * and Channel Down is Select. */
 
 struct lb_padkey {
 	unsigned id;
@@ -309,7 +328,6 @@ struct lb_padkey {
 
 static const struct lb_padkey lb_padkeys[] = {
 	{ RETRO_DEVICE_ID_JOYPAD_START,  DSCAN_ENTER },
-	{ RETRO_DEVICE_ID_JOYPAD_SELECT, DSCAN_SPACE },
 	{ RETRO_DEVICE_ID_JOYPAD_X,      DSCAN_1 },
 	{ RETRO_DEVICE_ID_JOYPAD_Y,      DSCAN_2 },
 	{ RETRO_DEVICE_ID_JOYPAD_L2,     DSCAN_Y },
@@ -328,7 +346,54 @@ static int lb_axis(int analog, bool neg, bool pos) {
 	return analog + 32768;
 }
 
+static void lb_release_padkeys(void) {
+	for (unsigned i = 0; i < LB_NUM_PADKEYS; i++) {
+		if (lb_padkey_down[i] && xroar.keyboard_interface)
+			keyboard_release(xroar.keyboard_interface, lb_padkeys[i].dscan);
+		lb_padkey_down[i] = false;
+	}
+}
+
+static int16_t lb_btn(unsigned pad, unsigned id) {
+	return input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, id);
+}
+
+/* Select toggles the on-screen keyboard; while it is up, pad 1 drives it
+ * instead of the joystick. */
+static bool lb_select_down;
+
+static void lb_poll_osk(void) {
+	bool sel = lb_btn(0, RETRO_DEVICE_ID_JOYPAD_SELECT) != 0;
+	if (sel && !lb_select_down) {
+		osk_toggle();
+		if (osk_active())
+			lb_release_padkeys();
+	}
+	lb_select_down = sel;
+
+	unsigned b = 0;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_UP)) b |= OSK_UP;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_DOWN)) b |= OSK_DOWN;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_LEFT)) b |= OSK_LEFT;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) b |= OSK_RIGHT;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_B)) b |= OSK_PRESS;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_A)) b |= OSK_BACKSPACE;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_Y)) b |= OSK_SHIFT;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_X)) b |= OSK_MOVE;
+	if (lb_btn(0, RETRO_DEVICE_ID_JOYPAD_START)) b |= OSK_ENTER;
+	osk_frame(b);
+}
+
 static void lb_poll_pad(unsigned pad) {
+	if (pad == 0 && osk_active()) {
+		/* Centre the joystick and let go of the fire buttons. */
+		unsigned port = opt_swap_ports ? 1 : 0;
+		libretro_host_joystick_axis(port, 0, 32767);
+		libretro_host_joystick_axis(port, 1, 32767);
+		libretro_host_joystick_button(port, 0, false);
+		libretro_host_joystick_button(port, 1, false);
+		return;
+	}
 	int lx = input_state_cb(pad, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
 	int ly = input_state_cb(pad, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
 	bool l = input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT);
@@ -349,6 +414,8 @@ static void lb_poll_pad(unsigned pad) {
 		input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A));
 
 	if (pad != 0 || !xroar.keyboard_interface)
+		return;
+	if (osk_active())
 		return;
 	for (unsigned i = 0; i < LB_NUM_PADKEYS; i++) {
 		bool down = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, lb_padkeys[i].id) != 0;
@@ -443,7 +510,7 @@ static void lb_set_input_descriptors(void) {
 		{ p, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y, "Joystick Y" }
 		PAD(0),
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START,  "ENTER key" },
-		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "SPACE key" },
+		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "On-screen keyboard" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,      "1 key" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,      "2 key" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,     "Y key" },
@@ -565,6 +632,7 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 		/* Force the options to be applied below. */
 		opt_tv_input = -2;
 		opt_ccr = -1;
+		opt_picture = -2;
 	} else {
 		struct machine_config *mc = machine_config_by_name(machine);
 		if (mc) {
@@ -573,13 +641,15 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 		}
 		opt_tv_input = -2;
 		opt_ccr = -1;
+		opt_picture = -2;
 	}
 
 	lb_read_runtime_options(true);
 	libretro_host_reset_audio();
 
 	/* Attach the content, autorunning where that makes sense. */
-	xroar_load_file_by_type(path, autorun ? 1 : 0);
+	if (!disk_autorun_load(path, autorun))
+		xroar_load_file_by_type(path, autorun ? 1 : 0);
 
 	unsigned std = (unsigned)xroar.machine_config->tv_standard;
 	lb_fps = (std == TV_PAL) ? 50.0 : 59.92;
@@ -604,6 +674,7 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 
 	memset(lb_held_char, 0, sizeof(lb_held_char));
 	memset(lb_padkey_down, 0, sizeof(lb_padkey_down));
+	osk_reset();
 	game_loaded = true;
 	lb_log(RETRO_LOG_INFO, "machine %s, content %s\n", machine, path);
 	return true;
@@ -627,6 +698,7 @@ RETRO_EXPORT void retro_run(void) {
 		lb_read_runtime_options(true);
 
 	input_poll_cb();
+	lb_poll_osk();
 	lb_poll_pad(0);
 	lb_poll_pad(1);
 
@@ -650,8 +722,17 @@ RETRO_EXPORT void retro_run(void) {
 		environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
 	}
 
-	video_cb(libretro_host_video_buffer(), lb_last_width, lb_last_height,
-		 lb_last_width * 4);
+	const void *frame = libretro_host_video_buffer();
+	if (osk_active()) {
+		if (!lb_out)
+			lb_out = malloc((size_t)LB_MAX_WIDTH * LB_MAX_HEIGHT * 4);
+		if (lb_out) {
+			memcpy(lb_out, frame, (size_t)lb_last_width * lb_last_height * 4);
+			osk_draw(lb_out, lb_last_width, lb_last_height, lb_last_width);
+			frame = lb_out;
+		}
+	}
+	video_cb(frame, lb_last_width, lb_last_height, lb_last_width * 4);
 
 	/* Hand over whatever audio the emulated frame produced; RetroArch's
 	 * dynamic rate control absorbs the small drift. */

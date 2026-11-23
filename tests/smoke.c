@@ -23,7 +23,8 @@ static retro_keyboard_event_t g_kbd;
 static unsigned frames_seen, frames_nonblack;
 static unsigned long long audio_frames_seen;
 static unsigned last_w, last_h;
-static bool pad_start;
+static bool pad_start, pad_select, pad_b, pad_right;
+static uint32_t last_frame[800 * 300];
 
 static bool env_cb(unsigned cmd, void *data) {
 	switch (cmd) {
@@ -57,6 +58,8 @@ static bool env_cb(unsigned cmd, void *data) {
 
 static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch) {
 	frames_seen++;
+	for (unsigned y = 0; y < height && y < 300; y++)
+		memcpy(last_frame + y * width, (const char *)data + y * pitch, width * 4);
 	last_w = width;
 	last_h = height;
 	for (unsigned y = 0; y < height; y++) {
@@ -81,6 +84,12 @@ static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, un
 	(void)index;
 	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_START)
 		return pad_start;
+	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_SELECT)
+		return pad_select;
+	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_B)
+		return pad_b;
+	if (port == 0 && device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_RIGHT)
+		return pad_right;
 	return 0;
 }
 
@@ -165,6 +174,24 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "FAIL: audio rate off\n");
 		rc = 1;
 	}
+
+	/* Open the on-screen keyboard, move right twice, press a key, and
+	 * optionally save the picture as a PPM. */
+	pad_select = true; p_retro_run(); pad_select = false; p_retro_run();
+	for (int i = 0; i < 2; i++) { pad_right = true; p_retro_run(); pad_right = false; p_retro_run(); }
+	pad_b = true; p_retro_run(); p_retro_run();
+	const char *ppm = getenv("SMOKE_PPM");
+	if (ppm) {
+		FILE *f = fopen(ppm, "wb");
+		fprintf(f, "P6\n%u %u\n255\n", last_w, last_h);
+		for (unsigned i = 0; i < last_w * last_h; i++) {
+			uint32_t c = last_frame[i];
+			fputc((c >> 16) & 0xff, f); fputc((c >> 8) & 0xff, f); fputc(c & 0xff, f);
+		}
+		fclose(f);
+	}
+	pad_b = false; p_retro_run();
+	pad_select = true; p_retro_run(); pad_select = false; p_retro_run();
 
 	void *state = malloc(state_size);
 	if (!p_retro_serialize(state, state_size)) {

@@ -39,7 +39,7 @@ $(BUILD)/core/%.o: upstream/src/%.c src/config.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/glue/%.o: src/%.c src/config.h src/libretro_host.h
+$(BUILD)/glue/%.o: src/%.c src/config.h $(wildcard src/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -47,7 +47,13 @@ SMOKE := $(BUILD)/smoke
 $(SMOKE): tests/smoke.c $(TARGET)
 	$(CC) -Isrc -O1 -g -o $@ tests/smoke.c -ldl
 
-test: $(SMOKE)
+DIRTEST := $(BUILD)/dirtest
+$(DIRTEST): tests/dirtest.c src/disk_autorun.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) -O1 -g -o $@ tests/dirtest.c
+
+test: $(SMOKE) $(DIRTEST)
+	mkdir -p $(BUILD)/dirtest-images && $(DIRTEST) $(BUILD)/dirtest-images
 	sh tests/run-smoke.sh $(SMOKE) ./$(TARGET)
 
 NDK_BUILD := $(if $(ANDROID_NDK_HOME),$(ANDROID_NDK_HOME)/ndk-build,ndk-build)

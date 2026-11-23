@@ -46,15 +46,20 @@ ROM. XRoar also matches ROMs by checksum, so other common names often work.
 | `.vhd` | Hard disk image |
 
 Zipped content works too. With **Autorun** on (the default), cassettes are
-CLOADed and run, disks are booted and binaries are run.
+CLOADed and run, binaries are run, and disks run their program: the core
+reads the disk's directory and types `RUN"NAME"` for a BASIC loader or
+`LOADM"NAME":EXEC` for a machine code program. It prefers a BASIC program
+called AUTOEXEC, BOOT, LOADER, MENU and the like, then a program named like
+the disk file, then the first BASIC program, then the first machine code
+one. Disks with no Disk BASIC directory (OS-9, boot disks) get `DOS`.
 
 ## Machine
 
-**Auto** (the default) picks a **CoCo 3** when the file name or any folder
-in its path mentions it (`CoCo 3`, `coco3`, `CoCo_3`, `cc3`), and a **CoCo 2
-(NTSC)** otherwise. So keeping CoCo 3 games in a `CoCo 3` folder is enough.
-To force a machine, use *Quick Menu > Core Options > Machine* and restart
-the content.
+**Auto** (the default) boots a **CoCo 3**, which runs most CoCo 1/2
+software too. If the file name or any folder in its path says `CoCo 1` or
+`CoCo 2` (also `coco2`, `CoCo_2`...), it boots a **CoCo 2** instead, so a
+`CoCo 2` folder is enough for games that need one. To force a machine, use
+*Quick Menu > Core Options > Machine* and restart the content.
 
 ## Controls
 
@@ -67,13 +72,32 @@ RetroPad 2 is the left one. *Player 1 joystick port* swaps them.
 | B | Fire 1 | OK |
 | A | Fire 2 (CoCo 3 joysticks) | |
 | Start | ENTER | Channel Up |
-| Select | SPACE | Channel Down |
+| Select | On-screen keyboard | Channel Down |
 | X | 1 | |
 | Y | 2 | |
 | L2 / R2 | Y / N | |
 | L3 / R3 | BREAK / CLEAR | |
 
 L1 and R1 are left free because L1+R1 opens the menu in TV Lite.
+
+### On-screen keyboard
+
+Press **Select** (Channel Down on the remote) to show a CoCo keyboard over
+the picture, and Select again (or the HIDE key) to put it away. While it is
+up the pad drives the keyboard instead of the joystick:
+
+| RetroPad | Remote | Does |
+|---|---|---|
+| D-pad | D-pad | Move |
+| B | OK | Type the key |
+| A | | Delete (left arrow) |
+| Y | | SHIFT on/off |
+| X | | Move the keyboard to the top or bottom |
+| Start | Channel Up | ENTER |
+
+SHIFT, CTRL and ALT stay down until pressed again. The bottom row types
+whole commands: DIR, RUN, CLOAD, EXEC and DOS (each with ENTER), plus `"`,
+`=` and `$`.
 
 Keyboard: by default (**Translated**) a key types what is printed on it, so
 Shift+2 types `"` or `@` the way your keyboard shows. Leave Caps Lock off:
@@ -95,6 +119,7 @@ without keys triggering hotkeys.
 
 | Option | Values |
 |---|---|
+| Border | None (default), Thin, Full |
 | Machine | Auto, CoCo 1/2, CoCo 2B (lowercase), CoCo 3, CoCo 3 with 6309 CPU, and PAL versions |
 | Video input | Default, composite blue-red artifacts, red-blue artifacts, S-Video (no artifacts), RGB |
 | Artifact colour renderer | 5-bit (fast), Simple, Partial NTSC, Simulated (slow), None |
@@ -112,8 +137,8 @@ reset, as on the real machine, which can flip the artifact phase).
 - Only one disk per game: no disk swapping from the RetroArch menu yet.
 - Save states work but go through a temporary file, so leave rewind off.
 - No WAV cassettes, printer, Becker port/DriveWire or GDB.
-- No on-screen keyboard; a keyboard, or the pad buttons above, is needed for
-  typing.
+- With Border set to None, CoCo 3 programs that use 225-line screens lose
+  their top and bottom lines; pick Thin for those.
 
 ## Building
 
