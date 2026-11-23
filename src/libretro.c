@@ -42,7 +42,6 @@
 #include "libretro_host.h"
 #include "disk_autorun.h"
 #include "osk.h"
-#include "autocrop.h"
 
 #define RETRO_EXPORT __attribute__((visibility("default")))
 
@@ -79,7 +78,6 @@ static bool opt_swap_ports;
 static int opt_tv_input = -1;   /* -1 = XRoar default */
 static int opt_ccr = VO_CMP_CCR_5BIT;
 static int opt_picture = -1;
-static bool opt_autocrop = true;
 static unsigned lb_out_w, lb_out_h;
 
 /* Output buffer used when the on-screen keyboard is drawn over the picture. */
@@ -114,7 +112,7 @@ static const struct retro_variable lb_vars[] = {
 	{ "xroar_osk_opacity",
 	  "On-screen keyboard opacity; 50%|25%|75%|100%|0%" },
 	{ "xroar_border",
-	  "Border; Smart (screen area, grows for big CoCo 3 modes)|None (256x192 only)|Thin|Full" },
+	  "Border; Thin|None (256x192 only)|Full" },
 	{ "xroar_tv_input",
 	  "Video input; Default|Composite, blue-red artifacts|Composite, red-blue artifacts|S-Video (no artifacts)|RGB" },
 	{ "xroar_ccr",
@@ -203,16 +201,11 @@ static void lb_read_runtime_options(bool apply) {
 	const char *op = lb_get_var("xroar_osk_opacity");
 	osk_set_opacity(op ? (unsigned)atoi(op) : 50);
 
-	int picture = VO_PICTURE_UNDERSCAN;
-	opt_autocrop = true;
+	int picture = VO_PICTURE_TITLE;
 	if (lb_var_is("xroar_border", "None"))
 		picture = VO_PICTURE_ZOOMED;
-	if (lb_var_is("xroar_border", "Thin"))
-		picture = VO_PICTURE_TITLE;
 	else if (lb_var_is("xroar_border", "Full"))
 		picture = UI_AUTO;
-	if (picture != VO_PICTURE_UNDERSCAN)
-		opt_autocrop = false;
 
 	if (!apply || !core_active)
 		return;
@@ -694,7 +687,6 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info *game) {
 	memset(lb_held_char, 0, sizeof(lb_held_char));
 	memset(lb_padkey_down, 0, sizeof(lb_padkey_down));
 	osk_reset();
-	autocrop_reset();
 	lb_out_w = lb_out_h = 0;
 	game_loaded = true;
 	lb_log(RETRO_LOG_INFO, "machine %s, content %s\n", machine, path);
@@ -734,11 +726,8 @@ RETRO_EXPORT void retro_run(void) {
 	const uint32_t *fb = libretro_host_video_buffer();
 	unsigned pitch = lb_last_width;
 
-	/* Visible rectangle: the whole picture, or the auto-cropped part. */
-	unsigned cx = 0, cy = 0, cw = lb_last_width, ch = lb_last_height;
-	if (opt_autocrop)
-		autocrop_update(fb, lb_last_width, lb_last_height, pitch, &cx, &cy, &cw, &ch);
-	const uint32_t *frame = fb + (size_t)cy * pitch + cx;
+	unsigned cw = lb_last_width, ch = lb_last_height;
+	const uint32_t *frame = fb;
 	unsigned fw = cw, fh = ch, fpitch = pitch;
 
 	if (osk_active()) {
